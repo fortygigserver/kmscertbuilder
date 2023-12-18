@@ -10,10 +10,9 @@ import time
 
 import boto3
 
-from asn1crypto import x509, core, algos
+from asn1crypto import x509, core
 from asn1crypto.util import int_to_bytes, int_from_bytes, timezone
 from oscrypto import asymmetric, util
-from cryptography.hazmat.primitives.asymmetric import padding
 
 from .version import __version__, __version_info__
 
