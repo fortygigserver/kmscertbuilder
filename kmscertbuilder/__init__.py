@@ -8,9 +8,12 @@ import sys
 import textwrap
 import time
 
-from asn1crypto import x509, keys, core
+import boto3
+
+from asn1crypto import x509, core, algos
 from asn1crypto.util import int_to_bytes, int_from_bytes, timezone
 from oscrypto import asymmetric, util
+from cryptography.hazmat.primitives.asymmetric import padding
 
 from .version import __version__, __version_info__
 
@@ -31,6 +34,7 @@ __all__ = [
     'pem_armor_certificate',
 ]
 
+kms = boto3.client('kms')
 
 def _writer(func):
     """
@@ -56,7 +60,11 @@ def pem_armor_certificate(certificate):
     return asymmetric.dump_certificate(certificate)
 
 
-class CertificateBuilder(object):
+class KMSCertificateBuilder(object):
+    '''
+    class CertificateBuilder(object):
+    Re-writing this class to create a certificate using KMS Keys.
+    '''
 
     _self_signed = False
     _serial_number = None
@@ -64,7 +72,7 @@ class CertificateBuilder(object):
     _begin_date = None
     _end_date = None
     _subject = None
-    _subject_public_key = None
+    _kms_arn = None
     _hash_algo = None
     _basic_constraints = None
     _subject_alt_name = None
@@ -96,7 +104,7 @@ class CertificateBuilder(object):
         'netscape_certificate_type',
     ])
 
-    def __init__(self, subject, subject_public_key):
+    def __init__(self, subject, kms_arn):
         """
         Unless changed, certificates will use SHA-256 for the signature,
         and will be valid from the moment created for one year. The serial
@@ -106,13 +114,12 @@ class CertificateBuilder(object):
             An asn1crypto.x509.Name object, or a dict - see the docstring
             for .subject for a list of valid options
 
-        :param subject_public_key:
-            An asn1crypto.keys.PublicKeyInfo object containing the public key
-            the certificate is being issued for
+        :param kms_arn:
+            KMS Key Pair ARN with key usage SIGN_VERIFY
         """
 
         self.subject = subject
-        self.subject_public_key = subject_public_key
+        self.kms_arn = kms_arn
         self.ca = False
 
         self._hash_algo = 'sha256'
@@ -278,30 +285,74 @@ class CertificateBuilder(object):
 
         self._subject = value
 
+    # @_writer
+    # def subject_public_key(self, value):
+    #     """
+    #     An asn1crypto.keys.PublicKeyInfo or oscrypto.asymmetric.PublicKey
+    #     object of the subject's public key.
+    #     """
+
+    #     is_oscrypto = isinstance(value, asymmetric.PublicKey)
+    #     if not isinstance(value, keys.PublicKeyInfo) and not is_oscrypto:
+    #         raise TypeError(_pretty_message(
+    #             '''
+    #             subject_public_key must be an instance of
+    #             asn1crypto.keys.PublicKeyInfo or oscrypto.asymmetric.PublicKey,
+    #             not %s
+    #             ''',
+    #             _type_name(value)
+    #         ))
+
+    #     if is_oscrypto:
+    #         value = value.asn1
+
+    #     self._subject_public_key = value
+    #     self._key_identifier = self._subject_public_key.sha1
+    #     self._authority_key_identifier = None
+    
     @_writer
-    def subject_public_key(self, value):
+    def kms_arn(self, value):
         """
-        An asn1crypto.keys.PublicKeyInfo or oscrypto.asymmetric.PublicKey
-        object of the subject's public key.
+        An oscrypto.asymmetric.PublicKey object of the KMS Key public key.
         """
 
-        is_oscrypto = isinstance(value, asymmetric.PublicKey)
-        if not isinstance(value, keys.PublicKeyInfo) and not is_oscrypto:
-            raise TypeError(_pretty_message(
-                '''
-                subject_public_key must be an instance of
-                asn1crypto.keys.PublicKeyInfo or oscrypto.asymmetric.PublicKey,
-                not %s
-                ''',
-                _type_name(value)
-            ))
+        # is_oscrypto = isinstance(value, asymmetric.PublicKey)
+        # if not isinstance(value, keys.PublicKeyInfo) and not is_oscrypto:
+        #     raise TypeError(_pretty_message(
+        #         '''
+        #         subject_public_key must be an instance of
+        #         asn1crypto.keys.PublicKeyInfo or oscrypto.asymmetric.PublicKey,
+        #         not %s
+        #         ''',
+        #         _type_name(value)
+        #     ))
 
-        if is_oscrypto:
-            value = value.asn1
+        #Updated the function to provide kms_arn instead of subject_public_key.
+        #Retrieves Public Key from KMS if possible and ensures key usage is correct.
+        #Loads Public Key into oscrypto.asymmetric.puiblic_key object and uses the asn1 value.
+        #Also sets self._kms_arn if needed.
 
-        self._subject_public_key = value
+        try:
+            PKresponse = kms.get_public_key(KeyId=value)
+        except:
+            print("Could not get PublicKey")
+
+        if not PKresponse['KeyUsage'] == "SIGN_VERIFY":
+            raise ValueError("kms_arn must be an ARN for a KMS Key with SIGN_VERIFY")
+        
+        rawPublicKey = PKresponse['PublicKey']
+
+        definedPubKey = asymmetric.load_public_key(rawPublicKey)
+
+        self._subject_public_key = definedPubKey.asn1
+        # if is_oscrypto:
+        #     value = value.asn1
+
+        self._kms_arn = value
+
         self._key_identifier = self._subject_public_key.sha1
-        self._authority_key_identifier = None
+        # self._authority_key_identifier = None
+
 
     @_writer
     def hash_algo(self, value):
@@ -800,32 +851,36 @@ class CertificateBuilder(object):
             'netscape_certificate_type': False,
         }.get(name, False)
 
-    def build(self, signing_private_key):
+    def build(self, kms_arn):
         """
         Validates the certificate information, constructs the ASN.1 structure
         and then signs it
 
-        :param signing_private_key:
-            An asn1crypto.keys.PrivateKeyInfo or oscrypto.asymmetric.PrivateKey
-            object for the private key to sign the certificate with. If the key
-            is self-signed, this should be the private key that matches the
-            public key, otherwise it needs to be the issuer's private key.
+        # :param signing_private_key:
+        #     An asn1crypto.keys.PrivateKeyInfo or oscrypto.asymmetric.PrivateKey
+        #     object for the private key to sign the certificate with. If the key
+        #     is self-signed, this should be the private key that matches the
+        #     public key, otherwise it needs to be the issuer's private key.
+
+         :param kms_arn:
+            An arn for the KMS Key to sign the request with. This should be
+            the ARN that matches the public key.
 
         :return:
             An asn1crypto.x509.Certificate object of the newly signed
             certificate
         """
 
-        is_oscrypto = isinstance(signing_private_key, asymmetric.PrivateKey)
-        if not isinstance(signing_private_key, keys.PrivateKeyInfo) and not is_oscrypto:
-            raise TypeError(_pretty_message(
-                '''
-                signing_private_key must be an instance of
-                asn1crypto.keys.PrivateKeyInfo or
-                oscrypto.asymmetric.PrivateKey, not %s
-                ''',
-                _type_name(signing_private_key)
-            ))
+        # is_oscrypto = isinstance(signing_private_key, asymmetric.PrivateKey)
+        # if not isinstance(signing_private_key, keys.PrivateKeyInfo) and not is_oscrypto:
+        #     raise TypeError(_pretty_message(
+        #         '''
+        #         signing_private_key must be an instance of
+        #         asn1crypto.keys.PrivateKeyInfo or
+        #         oscrypto.asymmetric.PrivateKey, not %s
+        #         ''',
+        #         _type_name(signing_private_key)
+        #     ))
 
         if self._self_signed is not True and self._issuer is None:
             raise ValueError(_pretty_message(
@@ -858,11 +913,62 @@ class CertificateBuilder(object):
                         ca_only_extension
                     ))
 
-        signature_algo = signing_private_key.algorithm
-        if signature_algo == 'ec':
-            signature_algo = 'ecdsa'
+        # signature_algo = signing_private_key.algorithm
+        # if signature_algo == 'ec':
+        #     signature_algo = 'ecdsa'
 
-        signature_algorithm_id = '%s_%s' % (self._hash_algo, signature_algo)
+        # signature_algorithm_id = '%s_%s' % (self._hash_algo, signature_algo)
+        #### Replaced the above with some information from the KMS Key.
+        #Get the supported algorithms from the KMS Key Pair and set to specific literals (chanagable)
+        #Need to construct signature_algorithm_id to match what x509.Certificate expects. 
+        #Always using SHA256 so need to match rsa or ecdsa
+
+        kms_algos = kms.describe_key(KeyId=kms_arn)['KeyMetadata']['SigningAlgorithms']
+
+
+        ## RSA_PSS requires asn1crypto.algos.SignedDigestAlgorithm to contain RSASSAPSSParams which are attempted below.
+        ## PSS Salt Length is incorrect. #TODO
+        # if "RSASSA_PSS_SHA_256" in kms_algos:
+        #     signature_algo = 'RSASSA_PSS_SHA_256'
+        # elif "ECDSA_SHA_256" in kms_algos:
+        #     signature_algo = 'ECDSA_SHA_256'
+
+        # if "ECDSA" in signature_algo:
+        #     signature_algorithm_id = {
+        #         'algorithm': 'sha256_ecdsa'
+        #     }
+        # elif "RSA" in signature_algo:
+        #     signature_algorithm_id = algos.SignedDigestAlgorithm({
+        #         'algorithm': 'rsassa_pss',
+        #         'parameters': algos.RSASSAPSSParams({
+        #             'hash_algorithm': algos.DigestAlgorithm({
+        #                 'algorithm': 'sha256'
+        #             }),
+        #             'mask_gen_algorithm': algos.MaskGenAlgorithm({
+        #                 'algorithm': 'mgf1',
+        #                 'parameters': algos.DigestAlgorithm({
+        #                     'algorithm': 'sha256'
+        #                 }),
+        #             }),
+        #             'salt_length': 222
+        #         })   
+        #     })
+
+
+        if "RSASSA_PKCS1_V1_5_SHA_256" in kms_algos:
+            signature_algo = 'RSASSA_PKCS1_V1_5_SHA_256'
+        elif "ECDSA_SHA_256" in kms_algos:
+            signature_algo = 'ECDSA_SHA_256'
+
+        if "ECDSA" in signature_algo:
+            signature_algorithm_id = {
+                'algorithm': 'sha256_ecdsa'
+            }
+        elif "RSA" in signature_algo:
+            signature_algorithm_id = {
+                'algorithm': 'sha256_rsa'
+            }
+
 
         # RFC 3280 4.1.2.5
         def _make_validity_time(dt):
@@ -894,9 +1000,7 @@ class CertificateBuilder(object):
         tbs_cert = x509.TbsCertificate({
             'version': 'v3',
             'serial_number': self._serial_number,
-            'signature': {
-                'algorithm': signature_algorithm_id
-            },
+            'signature': signature_algorithm_id,
             'issuer': self._issuer,
             'validity': {
                 'not_before': _make_validity_time(self._begin_date),
@@ -907,22 +1011,25 @@ class CertificateBuilder(object):
             'extensions': extensions
         })
 
-        if signing_private_key.algorithm == 'rsa':
-            sign_func = asymmetric.rsa_pkcs1v15_sign
-        elif signing_private_key.algorithm == 'dsa':
-            sign_func = asymmetric.dsa_sign
-        elif signing_private_key.algorithm == 'ec':
-            sign_func = asymmetric.ecdsa_sign
+        # if signing_private_key.algorithm == 'rsa':
+        #     sign_func = asymmetric.rsa_pkcs1v15_sign
+        # elif signing_private_key.algorithm == 'dsa':
+        #     sign_func = asymmetric.dsa_sign
+        # elif signing_private_key.algorithm == 'ec':
+        #     sign_func = asymmetric.ecdsa_sign
 
-        if not is_oscrypto:
-            signing_private_key = asymmetric.load_private_key(signing_private_key)
-        signature = sign_func(signing_private_key, tbs_cert.dump(), self._hash_algo)
+        # if not is_oscrypto:
+        #     signing_private_key = asymmetric.load_private_key(signing_private_key)
+        # signature = sign_func(signing_private_key, tbs_cert.dump(), self._hash_algo)
+
+        #Get signature from KMS instead of using sign_func from the oscrypto.asymmetric.private_key object.
+        #Use the signature algo specified when describing the key earlier.
+
+        signature = kms.sign(KeyId=kms_arn,SigningAlgorithm=signature_algo,Message=tbs_cert.dump())['Signature']
 
         return x509.Certificate({
             'tbs_certificate': tbs_cert,
-            'signature_algorithm': {
-                'algorithm': signature_algorithm_id
-            },
+            'signature_algorithm': signature_algorithm_id,
             'signature_value': signature
         })
 
@@ -976,3 +1083,93 @@ def _type_name(value):
     if cls.__module__ in set(['builtins', '__builtin__']):
         return cls.__name__
     return '%s.%s' % (cls.__module__, cls.__name__)
+
+def KMSCertificateSigner(tbscert, issuer, kms_arn):
+    '''
+    :param tbscert:
+        An asn1crypto.csr.CertificationRequest object to be signed
+
+    :param issuer:
+        An asn1crypto.x509.Certificate object to be marked as the issuer of the end-entity certificate
+
+    :param kms_arn:
+        An arn for the KMS Key to sign the request with. This should be the ARN that matches the issuer.
+        
+    :return:
+        An x509 Certificate object for the end entity
+    '''
+    
+    kms_algos = kms.describe_key(KeyId=kms_arn)['KeyMetadata']['SigningAlgorithms']
+
+        ## RSA_PSS requires asn1crypto.algos.SignedDigestAlgorithm to contain RSASSAPSSParams which are attempted below.
+        ## PSS Salt Length is incorrect. #TODO
+        # if "RSASSA_PSS_SHA_256" in kms_algos:
+        #     signature_algo = 'RSASSA_PSS_SHA_256'
+        # elif "ECDSA_SHA_256" in kms_algos:
+        #     signature_algo = 'ECDSA_SHA_256'
+
+        # if "ECDSA" in signature_algo:
+        #     signature_algorithm_id = {
+        #         'algorithm': 'sha256_ecdsa'
+        #     }
+        # elif "RSA" in signature_algo:
+        #     signature_algorithm_id = algos.SignedDigestAlgorithm({
+        #         'algorithm': 'rsassa_pss',
+        #         'parameters': algos.RSASSAPSSParams({
+        #             'hash_algorithm': algos.DigestAlgorithm({
+        #                 'algorithm': 'sha256'
+        #             }),
+        #             'mask_gen_algorithm': algos.MaskGenAlgorithm({
+        #                 'algorithm': 'mgf1',
+        #                 'parameters': algos.DigestAlgorithm({
+        #                     'algorithm': 'sha256'
+        #                 }),
+        #             }),
+        #             'salt_length': 222
+        #         })   
+        #     })
+
+    if "RSASSA_PKCS1_V1_5_SHA_256" in kms_algos:
+        signature_algo = 'RSASSA_PKCS1_V1_5_SHA_256'
+    elif "ECDSA_SHA_256" in kms_algos:
+        signature_algo = 'ECDSA_SHA_256'
+
+    if "ECDSA" in signature_algo:
+        signature_algorithm_id = {
+            'algorithm': 'sha256_ecdsa'
+        }
+    elif "RSA" in signature_algo:
+        signature_algorithm_id = {
+                'algorithm': 'sha256_rsa'
+            }
+
+
+    tbs_time_part = int_to_bytes(int(time.time()))
+    tbs_random_part = util.rand_bytes(4)
+    tbsserial = int_from_bytes(tbs_time_part + tbs_random_part)
+
+    to_be_signed = x509.TbsCertificate({
+        'version': 'v3',
+        'serial_number': tbsserial,
+        'signature': signature_algorithm_id,
+        'issuer': issuer.issuer,
+        'validity': {
+            'not_before': x509.Time(name='utc_time', value=(datetime.now(timezone.utc))),
+            'not_after': x509.Time(name='utc_time', value=(datetime.now(timezone.utc) + timedelta(365))),
+        },
+        'subject': tbscert['certification_request_info']['subject'],
+        'subject_public_key_info': tbscert['certification_request_info']['subject_pk_info']
+    })
+    
+
+    # to_be_signed.authority_key_identifier = x509.AuthorityKeyIdentifier({
+    #     'key_identifier': issuer.public_key.sha1
+    # })
+
+    signature = kms.sign(KeyId=kms_arn,SigningAlgorithm=signature_algo,Message=to_be_signed.dump())['Signature']
+
+    return x509.Certificate({
+        'tbs_certificate': to_be_signed,
+        'signature_algorithm': signature_algorithm_id,
+        'signature_value': signature
+    })

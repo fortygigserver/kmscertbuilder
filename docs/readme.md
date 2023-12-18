@@ -1,6 +1,6 @@
-# certbuilder Documentation
+# kmscertbuilder Documentation
 
-*certbuilder* is a Python library for constructing X.509 certificates. It
+*kmscertbuilder* is a fork of certbuilder, and is a Python library for constructing X.509 certificates using KMS Keys. It
 provides a high-level interface with knowledge of RFC 5280 to produce, valid,
 correct certificates without terrible APIs or hunting through RFCs.
 
@@ -12,40 +12,54 @@ easy to install and use on Windows, OS X, Linux and the BSDs.
 The documentation consists of the following topics:
 
  - [Basic Usage](#basic-usage)
- - [CA and End-Entity Certificates](#ca-and-end-entity-certificates)
- - [API Documentation](api.md)
 
 ## Basic Usage
 
-A simple, self-signed certificate can be created by generating a public/private
-key pair using *oscrypto* and then passing a dictionary of name information to
-the `CertificateBuilder()` constructor:
+The example shows how to create a self-signed certificate using a KMS Key pair by passing in a dictionary of name information to
+the `KMSCertificateBuilder()`. This generated self-signed certificate (root CA) can be used with `KMSCertificateSigner` to sign end-entity certificate signing requests (CSRs).constructor:
 
-```python
-from oscrypto import asymmetric
-from certbuilder import CertificateBuilder, pem_armor_certificate
+```bash
+git clone https://github.com/fortygigserver/kmscertbuilder
+```
+
+``` python 
+import sys
+sys.path.append('.\kmscertbuilder')
+
+from asn1crypto import x509, pem
+from kmscertbuilder import KMSCertificateBuilder, KMSCertificateSigner, pem_armor_certificate
 
 
-public_key, private_key = asymmetric.generate_pair('rsa', bit_size=2048)
+kms_arn = 'arn:aws:kms:eu-west-1:xxxxxxxxxxxx:key/1234abcd-12ab-34cd-56ef-1234567890ab'
 
-with open('/path/to/my/env/will_bond.key', 'wb') as f:
-    f.write(asymmetric.dump_private_key(private_key, 'password'))
-
-builder = CertificateBuilder(
+builder = KMSCertificateBuilder(
     {
-        'country_name': 'US',
-        'state_or_province_name': 'Massachusetts',
-        'locality_name': 'Newbury',
-        'organization_name': 'Codex Non Sufficit LC',
-        'common_name': 'Will Bond',
+        'country_name': 'IE',
+        'state_or_province_name': 'Meath',
+        'locality_name': 'East Meath',
+        'organization_name': 'Palmep Tech',
+        'common_name': 'Patrick',
     },
-    public_key
+    kms_arn
 )
 builder.self_signed = True
-certificate = builder.build(private_key)
+builder.ca = True
+root_kms_ca = builder.build(kms_arn)
 
-with open('/path/to/my/env/will_bond.crt', 'wb') as f:
-    f.write(pem_armor_certificate(certificate))
+with open('/path/to/my/env/root_kms_ca.crt', 'wb') as f:
+    f.write(pem_armor_certificate(root_kms_ca))
+
+
+# Read end-entity certificate and sign with root
+
+with open('/path/to/my/env/ClusterCsr.csr', 'rb') as f:
+    certification_request = x509.TbsCertificate.load(pem.unarmor(f.read())[2])
+
+
+end_entity_certificate = KMSCertificateSigner(certification_request, kms_root_ca, kms_arn)
+
+with open('/path/to/my/env/CustomerHsmCertificate.crt', 'wb') as f:
+    f.write(pem_armor_certificate(end_entity_certificate))
 ```
 
 All name components must be unicode strings. Common name keys include:
@@ -66,67 +80,3 @@ Less common keys include:
  - `incorporation_locality`
  - `incorporation_state_or_province`
  - `incorporation_country`
-
-See [`CertificateBuilder.subject`](api.md#subject-attribute) for a full
-list of supported name keys.
-
-## CA and End-Entity Certificates
-
-Beyond self-signed certificates lives the world of root CAs, intermediate
-CAs and end-entity certificates.
-
-The example below will create a root CA and then an end-entity certificate
-signed by the root. By simply creating another CA certificate signed by the
-root CA, an intermediate CA certificate could be added.
-
-```python
-from oscrypto import asymmetric
-from certbuilder import CertificateBuilder, pem_armor_certificate
-
-
-# Generate and save the key and certificate for the root CA
-root_ca_public_key, root_ca_private_key = asymmetric.generate_pair('rsa', bit_size=2048)
-
-with open('/path/to/my/env/root_ca.key', 'wb') as f:
-    f.write(asymmetric.dump_private_key(root_ca_private_key, 'password'))
-
-builder = CertificateBuilder(
-    {
-        'country_name': 'US',
-        'state_or_province_name': 'Massachusetts',
-        'locality_name': 'Newbury',
-        'organization_name': 'Codex Non Sufficit LC',
-        'common_name': 'CodexNS Root CA 1',
-    },
-    root_ca_public_key
-)
-builder.self_signed = True
-builder.ca = True
-root_ca_certificate = builder.build(root_ca_private_key)
-
-with open('/path/to/my/env/root_ca.crt', 'wb') as f:
-    f.write(pem_armor_certificate(root_ca_certificate))
-
-
-# Generate an end-entity key and certificate, signed by the root
-end_entity_public_key, end_entity_private_key = asymmetric.generate_pair('rsa', bit_size=2048)
-
-with open('/path/to/my/env/will_bond.key', 'wb') as f:
-    f.write(asymmetric.dump_private_key(end_entity_private_key, 'password'))
-
-builder = CertificateBuilder(
-    {
-        'country_name': 'US',
-        'state_or_province_name': 'Massachusetts',
-        'locality_name': 'Newbury',
-        'organization_name': 'Codex Non Sufficit LC',
-        'common_name': 'Will Bond',
-    },
-    end_entity_public_key
-)
-builder.issuer = root_ca_certificate
-end_entity_certificate = builder.build(root_ca_private_key)
-
-with open('/path/to/my/env/will_bond.crt', 'wb') as f:
-    f.write(pem_armor_certificate(end_entity_certificate))
-```
