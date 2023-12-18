@@ -42,12 +42,12 @@ the `KMSCertificateBuilder()`. This generated self-signed certificate (root CA) 
 
 ```bash
 git clone https://github.com/fortygigserver/kmscertbuilder
-pip3 install -r .\kmscertbuilder\requires\requirements.txt
+pip3 install -r ./kmscertbuilder/requires/requirements.txt
 ```
 
 ``` python 
 import sys
-sys.path.append('.\kmscertbuilder')
+sys.path.append('./kmscertbuilder')
 
 from asn1crypto import x509, pem, csr
 from kmscertbuilder import KMSCertificateBuilder, KMSCertificateSigner, pem_armor_certificate
