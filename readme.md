@@ -1,4 +1,4 @@
-# certbuilder
+# kmscertbuilder
 
 A Python library for creating and signing X.509 certificates.
 
