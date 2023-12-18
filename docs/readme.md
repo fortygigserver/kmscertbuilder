@@ -20,13 +20,14 @@ the `KMSCertificateBuilder()`. This generated self-signed certificate (root CA) 
 
 ```bash
 git clone https://github.com/fortygigserver/kmscertbuilder
+pip3 install -r .\kmscertbuilder\requires\requirements.txt
 ```
 
 ``` python 
 import sys
 sys.path.append('.\kmscertbuilder')
 
-from asn1crypto import x509, pem
+from asn1crypto import x509, pem, csr
 from kmscertbuilder import KMSCertificateBuilder, KMSCertificateSigner, pem_armor_certificate
 
 
@@ -53,7 +54,7 @@ with open('/path/to/my/env/root_kms_ca.crt', 'wb') as f:
 # Read end-entity certificate and sign with root
 
 with open('/path/to/my/env/ClusterCsr.csr', 'rb') as f:
-    certification_request = x509.TbsCertificate.load(pem.unarmor(f.read())[2])
+    certification_request = csr.CertificationRequest.load(pem.unarmor(f.read())[2])
 
 
 end_entity_certificate = KMSCertificateSigner(certification_request, kms_root_ca, kms_arn)
