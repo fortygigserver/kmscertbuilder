@@ -79,7 +79,7 @@ with open('/path/to/my/env/ClusterCsr.csr', 'rb') as f:
     certification_request = csr.CertificationRequest.load(pem.unarmor(f.read())[2])
 
 
-end_entity_certificate = KMSCertificateSigner(certification_request, kms_root_ca, kms_arn)
+end_entity_certificate = KMSCertificateSigner(certification_request, root_kms_ca, kms_arn)
 
 with open('/path/to/my/env/CustomerHsmCertificate.crt', 'wb') as f:
     f.write(pem_armor_certificate(end_entity_certificate))
