@@ -55,6 +55,7 @@ from kmscertbuilder import KMSCertificateBuilder, KMSCertificateSigner, pem_armo
 
 kms_arn = 'arn:aws:kms:eu-west-1:xxxxxxxxxxxx:key/1234abcd-12ab-34cd-56ef-1234567890ab'
 
+# Embed the kms_arn value into the root certificate for reference in future
 builder = KMSCertificateBuilder(
     {
         'country_name': 'IE',
@@ -62,6 +63,7 @@ builder = KMSCertificateBuilder(
         'locality_name': 'East Meath',
         'organization_name': 'Palmep Tech',
         'common_name': 'Patrick',
+        'pseudonym': kms_arn
     },
     kms_arn
 )
