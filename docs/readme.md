@@ -33,6 +33,7 @@ from kmscertbuilder import KMSCertificateBuilder, KMSCertificateSigner, pem_armo
 
 kms_arn = 'arn:aws:kms:eu-west-1:xxxxxxxxxxxx:key/1234abcd-12ab-34cd-56ef-1234567890ab'
 
+# Embed the kms_arn value into the root certificate for reference in future
 builder = KMSCertificateBuilder(
     {
         'country_name': 'IE',
@@ -40,6 +41,7 @@ builder = KMSCertificateBuilder(
         'locality_name': 'East Meath',
         'organization_name': 'Palmep Tech',
         'common_name': 'Patrick',
+        'pseudonym': kms_arn
     },
     kms_arn
 )
@@ -57,7 +59,7 @@ with open('/path/to/my/env/ClusterCsr.csr', 'rb') as f:
     certification_request = csr.CertificationRequest.load(pem.unarmor(f.read())[2])
 
 
-end_entity_certificate = KMSCertificateSigner(certification_request, kms_root_ca, kms_arn)
+end_entity_certificate = KMSCertificateSigner(certification_request, root_kms_ca, kms_arn)
 
 with open('/path/to/my/env/CustomerHsmCertificate.crt', 'wb') as f:
     f.write(pem_armor_certificate(end_entity_certificate))
