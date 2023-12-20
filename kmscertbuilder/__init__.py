@@ -10,7 +10,7 @@ import time
 
 import boto3
 
-from asn1crypto import x509, core
+from asn1crypto import x509, core, algos
 from asn1crypto.util import int_to_bytes, int_from_bytes, timezone
 from oscrypto import asymmetric, util
 
@@ -925,37 +925,9 @@ class KMSCertificateBuilder(object):
         kms_algos = kms.describe_key(KeyId=kms_arn)['KeyMetadata']['SigningAlgorithms']
 
 
-        ## RSA_PSS requires asn1crypto.algos.SignedDigestAlgorithm to contain RSASSAPSSParams which are attempted below.
-        ## PSS Salt Length is incorrect. #TODO
-        # if "RSASSA_PSS_SHA_256" in kms_algos:
-        #     signature_algo = 'RSASSA_PSS_SHA_256'
-        # elif "ECDSA_SHA_256" in kms_algos:
-        #     signature_algo = 'ECDSA_SHA_256'
-
-        # if "ECDSA" in signature_algo:
-        #     signature_algorithm_id = {
-        #         'algorithm': 'sha256_ecdsa'
-        #     }
-        # elif "RSA" in signature_algo:
-        #     signature_algorithm_id = algos.SignedDigestAlgorithm({
-        #         'algorithm': 'rsassa_pss',
-        #         'parameters': algos.RSASSAPSSParams({
-        #             'hash_algorithm': algos.DigestAlgorithm({
-        #                 'algorithm': 'sha256'
-        #             }),
-        #             'mask_gen_algorithm': algos.MaskGenAlgorithm({
-        #                 'algorithm': 'mgf1',
-        #                 'parameters': algos.DigestAlgorithm({
-        #                     'algorithm': 'sha256'
-        #                 }),
-        #             }),
-        #             'salt_length': 222
-        #         })   
-        #     })
-
-
-        if "RSASSA_PKCS1_V1_5_SHA_256" in kms_algos:
-            signature_algo = 'RSASSA_PKCS1_V1_5_SHA_256'
+        ## KMS PSS Salt Length is always equal to digest size. Since this application uses only sha256, 32 bytes (256bit) is hardcoded.
+        if "RSASSA_PSS_SHA_256" in kms_algos:
+            signature_algo = 'RSASSA_PSS_SHA_256'
         elif "ECDSA_SHA_256" in kms_algos:
             signature_algo = 'ECDSA_SHA_256'
 
@@ -964,9 +936,36 @@ class KMSCertificateBuilder(object):
                 'algorithm': 'sha256_ecdsa'
             }
         elif "RSA" in signature_algo:
-            signature_algorithm_id = {
-                'algorithm': 'sha256_rsa'
-            }
+            signature_algorithm_id = algos.SignedDigestAlgorithm({
+                'algorithm': 'rsassa_pss',
+                'parameters': algos.RSASSAPSSParams({
+                    'hash_algorithm': algos.DigestAlgorithm({
+                        'algorithm': 'sha256'
+                    }),
+                    'mask_gen_algorithm': algos.MaskGenAlgorithm({
+                        'algorithm': 'mgf1',
+                        'parameters': algos.DigestAlgorithm({
+                            'algorithm': 'sha256'
+                        }),
+                    }),
+                    'salt_length': 32
+                })   
+            })
+
+        ## Use RSASSA_PSS where possible. PKCS1.5 is available only for backwards compatibility 
+        # if "RSASSA_PKCS1_V1_5_SHA_256" in kms_algos:
+        #     signature_algo = 'RSASSA_PKCS1_V1_5_SHA_256'
+        # elif "ECDSA_SHA_256" in kms_algos:
+        #     signature_algo = 'ECDSA_SHA_256'
+
+        # if "ECDSA" in signature_algo:
+        #     signature_algorithm_id = {
+        #         'algorithm': 'sha256_ecdsa'
+        #     }
+        # elif "RSA" in signature_algo:
+        #     signature_algorithm_id = {
+        #         'algorithm': 'sha256_rsa'
+        #     }
 
 
         # RFC 3280 4.1.2.5
@@ -1100,36 +1099,9 @@ def KMSCertificateSigner(tbscert, issuer, kms_arn):
     
     kms_algos = kms.describe_key(KeyId=kms_arn)['KeyMetadata']['SigningAlgorithms']
 
-        ## RSA_PSS requires asn1crypto.algos.SignedDigestAlgorithm to contain RSASSAPSSParams which are attempted below.
-        ## PSS Salt Length is incorrect. #TODO
-        # if "RSASSA_PSS_SHA_256" in kms_algos:
-        #     signature_algo = 'RSASSA_PSS_SHA_256'
-        # elif "ECDSA_SHA_256" in kms_algos:
-        #     signature_algo = 'ECDSA_SHA_256'
-
-        # if "ECDSA" in signature_algo:
-        #     signature_algorithm_id = {
-        #         'algorithm': 'sha256_ecdsa'
-        #     }
-        # elif "RSA" in signature_algo:
-        #     signature_algorithm_id = algos.SignedDigestAlgorithm({
-        #         'algorithm': 'rsassa_pss',
-        #         'parameters': algos.RSASSAPSSParams({
-        #             'hash_algorithm': algos.DigestAlgorithm({
-        #                 'algorithm': 'sha256'
-        #             }),
-        #             'mask_gen_algorithm': algos.MaskGenAlgorithm({
-        #                 'algorithm': 'mgf1',
-        #                 'parameters': algos.DigestAlgorithm({
-        #                     'algorithm': 'sha256'
-        #                 }),
-        #             }),
-        #             'salt_length': 222
-        #         })   
-        #     })
-
-    if "RSASSA_PKCS1_V1_5_SHA_256" in kms_algos:
-        signature_algo = 'RSASSA_PKCS1_V1_5_SHA_256'
+    ## KMS PSS Salt Length is always equal to digest size. Since this application uses only sha256, 32 bytes (256bit) is hardcoded.
+    if "RSASSA_PSS_SHA_256" in kms_algos:
+        signature_algo = 'RSASSA_PSS_SHA_256'
     elif "ECDSA_SHA_256" in kms_algos:
         signature_algo = 'ECDSA_SHA_256'
 
@@ -1138,9 +1110,36 @@ def KMSCertificateSigner(tbscert, issuer, kms_arn):
             'algorithm': 'sha256_ecdsa'
         }
     elif "RSA" in signature_algo:
-        signature_algorithm_id = {
-                'algorithm': 'sha256_rsa'
-            }
+        signature_algorithm_id = algos.SignedDigestAlgorithm({
+            'algorithm': 'rsassa_pss',
+            'parameters': algos.RSASSAPSSParams({
+                'hash_algorithm': algos.DigestAlgorithm({
+                    'algorithm': 'sha256'
+                }),
+                'mask_gen_algorithm': algos.MaskGenAlgorithm({
+                    'algorithm': 'mgf1',
+                    'parameters': algos.DigestAlgorithm({
+                        'algorithm': 'sha256'
+                    }),
+                }),
+                'salt_length': 32
+            })   
+        })
+
+    ## Use RSASSA_PSS where possible. PKCS1.5 is available only for backwards compatibility 
+    # if "RSASSA_PKCS1_V1_5_SHA_256" in kms_algos:
+    #     signature_algo = 'RSASSA_PKCS1_V1_5_SHA_256'
+    # elif "ECDSA_SHA_256" in kms_algos:
+    #     signature_algo = 'ECDSA_SHA_256'
+
+    # if "ECDSA" in signature_algo:
+    #     signature_algorithm_id = {
+    #         'algorithm': 'sha256_ecdsa'
+    #     }
+    # elif "RSA" in signature_algo:
+    #     signature_algorithm_id = {
+    #             'algorithm': 'sha256_rsa'
+    #         }
 
 
     tbs_time_part = int_to_bytes(int(time.time()))
@@ -1160,10 +1159,6 @@ def KMSCertificateSigner(tbscert, issuer, kms_arn):
         'subject_public_key_info': tbscert['certification_request_info']['subject_pk_info']
     })
     
-
-    # to_be_signed.authority_key_identifier = x509.AuthorityKeyIdentifier({
-    #     'key_identifier': issuer.public_key.sha1
-    # })
 
     signature = kms.sign(KeyId=kms_arn,SigningAlgorithm=signature_algo,Message=to_be_signed.dump())['Signature']
 
